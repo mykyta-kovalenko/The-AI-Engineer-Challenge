@@ -192,6 +192,7 @@ yarn-error.log*
 .cursor/
 *.swp
 *.swo
+*.mdc
 
 # Deployment
 .vercel
