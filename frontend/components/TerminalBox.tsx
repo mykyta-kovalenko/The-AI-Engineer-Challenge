@@ -94,12 +94,18 @@ export default function TerminalBox() {
   }, [userInput]);
 
   const focusInput = () => {
-    setTimeout(() => {
-      if (hiddenInputRef.current) {
+    console.log('focusInput called');
+    if (hiddenInputRef.current) {
+      try {
         hiddenInputRef.current.focus();
-        console.log('Input focused');
+        hiddenInputRef.current.click(); // Sometimes needed for mobile
+        console.log('Input focused and clicked');
+      } catch (error) {
+        console.error('Error focusing input:', error);
       }
-    }, 50);
+    } else {
+      console.warn('hiddenInputRef.current is null');
+    }
   };
 
   const handleInitialPromptDone = () => {
@@ -427,16 +433,14 @@ export default function TerminalBox() {
     }
   }, [isInputDisabled, showInitialPrompt]);
 
-  // Ensure input stays focused in static states (mobile keyboard fix)
+  // Focus input when ready (mobile keyboard fix)
   useEffect(() => {
-    const interval = setInterval(() => {
-      // Only focus if we're in a static state and the input isn't focused
-      if (!isInputDisabled && !showInitialPrompt && document.activeElement !== hiddenInputRef.current) {
+    if (!isInputDisabled && !showInitialPrompt) {
+      // Delay to ensure DOM is ready
+      setTimeout(() => {
         focusInput();
-      }
-    }, 1000); // Check every second
-
-    return () => clearInterval(interval);
+      }, 500);
+    }
   }, [isInputDisabled, showInitialPrompt]);
 
        return (
@@ -448,7 +452,9 @@ export default function TerminalBox() {
        }}
        onTouchStart={(e) => {
          // For mobile: always focus input when user touches anywhere on terminal
+         console.log('Main container touched');
          e.preventDefault();
+         e.stopPropagation();
          focusInput();
        }}
        onClick={() => {
@@ -538,7 +544,9 @@ export default function TerminalBox() {
            onClick={handleTerminalClick}
            onTouchStart={(e) => {
              // Mobile: focus input on touch
+             console.log('Terminal content touched');
              e.preventDefault();
+             e.stopPropagation();
              focusInput();
            }}
          >
@@ -694,7 +702,7 @@ export default function TerminalBox() {
           paddingTop: '12px',
           opacity: isInputDisabled ? 0.5 : 1
         }}>
-                     {/* Hidden input for keyboard handling */}
+                     {/* Mobile-friendly input for keyboard handling */}
            <input
              ref={hiddenInputRef}
              value={userInput}
@@ -711,19 +719,42 @@ export default function TerminalBox() {
              disabled={isInputDisabled}
              style={{
                position: 'absolute',
-               left: '-9999px',
+               top: 0,
+               left: 0,
+               width: '100%',
+               height: '100%',
                opacity: 0,
+               background: 'transparent',
+               border: 'none',
+               outline: 'none',
+               fontSize: '16px', // Prevents zoom on iOS
+               zIndex: 1000,
+               pointerEvents: 'auto',
              }}
              autoFocus
              spellCheck={false}
-             onTouchStart={() => {
-               // Ensure input is focused when touched directly
-               focusInput();
+             autoComplete="off"
+             autoCorrect="off"
+             autoCapitalize="off"
+             onTouchStart={(e) => {
+               console.log('Input touched directly');
+               e.stopPropagation();
+               if (hiddenInputRef.current) {
+                 hiddenInputRef.current.focus();
+               }
+             }}
+             onFocus={() => {
+               console.log('Input focused');
              }}
              onBlur={() => {
+               console.log('Input blurred');
                // Re-focus if input loses focus in static state
                if (!isInputDisabled) {
-                 setTimeout(() => focusInput(), 100);
+                 setTimeout(() => {
+                   if (hiddenInputRef.current) {
+                     hiddenInputRef.current.focus();
+                   }
+                 }, 100);
                }
              }}
            />
