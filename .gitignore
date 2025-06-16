@@ -189,8 +189,10 @@ yarn-error.log*
 # General
 .DS_Store
 .vscode/
+.cursor/
 *.swp
 *.swo
 
 # Deployment
 .vercel
+
