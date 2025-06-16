@@ -95,18 +95,19 @@ export default function TerminalBox() {
 
   const focusInput = () => {
     setTimeout(() => {
-      if (hiddenInputRef.current && !isResponding) {
+      if (hiddenInputRef.current) {
         hiddenInputRef.current.focus();
         console.log('Input focused');
       }
-    }, 100);
+    }, 50);
   };
 
   const handleInitialPromptDone = () => {
     console.log('Initial prompt completed');
     setShowInitialPrompt(false);
     setIsTyping(false);
-    focusInput(); // Auto-focus after initial prompt
+    // Auto-focus after the initial prompt is done
+    focusInput();
   };
 
   const handleTypingStart = () => {
@@ -117,7 +118,8 @@ export default function TerminalBox() {
   const handleTypingDone = () => {
     console.log('Typing done');
     setIsTyping(false);
-    focusInput(); // Auto-focus after any typing animation
+    // Re-focus the input after any typing animation finishes
+    focusInput();
   };
 
   // Emergency recovery - reset typing state if stuck
@@ -425,14 +427,35 @@ export default function TerminalBox() {
     }
   }, [isInputDisabled, showInitialPrompt]);
 
-  return (
-    <div 
-      className="w-full mx-auto px-4 py-4" 
-      style={{ 
-        height: '70vh',
-        maxWidth: '600px',
-      }}
-    >
+  // Ensure input stays focused in static states (mobile keyboard fix)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      // Only focus if we're in a static state and the input isn't focused
+      if (!isInputDisabled && !showInitialPrompt && document.activeElement !== hiddenInputRef.current) {
+        focusInput();
+      }
+    }, 1000); // Check every second
+
+    return () => clearInterval(interval);
+  }, [isInputDisabled, showInitialPrompt]);
+
+       return (
+     <div 
+       className="w-full mx-auto px-4 py-4" 
+       style={{ 
+         height: '70vh',
+         maxWidth: '600px',
+       }}
+       onTouchStart={(e) => {
+         // For mobile: always focus input when user touches anywhere on terminal
+         e.preventDefault();
+         focusInput();
+       }}
+       onClick={() => {
+         // For desktop: focus input when clicking anywhere
+         focusInput();
+       }}
+     >
       <div
         className="bg-black border border-green-500 mx-auto flex flex-col"
         style={{
@@ -504,16 +527,21 @@ export default function TerminalBox() {
           </button>
         </div>
 
-        {/* Terminal Content */}
-        <div
-          style={{
-            flex: 1,
-            display: 'flex',
-            flexDirection: 'column',
-            padding: '16px',
-          }}
-          onClick={handleTerminalClick}
-        >
+                 {/* Terminal Content */}
+         <div
+           style={{
+             flex: 1,
+             display: 'flex',
+             flexDirection: 'column',
+             padding: '16px',
+           }}
+           onClick={handleTerminalClick}
+           onTouchStart={(e) => {
+             // Mobile: focus input on touch
+             e.preventDefault();
+             focusInput();
+           }}
+         >
         {/* Scrollable content area */}
         <div 
           ref={scrollAreaRef}
@@ -666,29 +694,39 @@ export default function TerminalBox() {
           paddingTop: '12px',
           opacity: isInputDisabled ? 0.5 : 1
         }}>
-          {/* Hidden input for keyboard handling */}
-          <input
-            ref={hiddenInputRef}
-            value={userInput}
-            onChange={e => {
-              const newValue = e.target.value;
-              const wordCount = newValue.trim().split(/\s+/).filter(word => word.length > 0).length;
-              
-              // Only update if within word limit or if deleting
-              if (wordCount <= MAX_WORDS || newValue.length < userInput.length) {
-                setUserInput(newValue);
-              }
-            }}
-            onKeyDown={handleKeyDown}
-            disabled={isInputDisabled}
-            style={{
-              position: 'absolute',
-              left: '-9999px',
-              opacity: 0,
-            }}
-            autoFocus
-            spellCheck={false}
-          />
+                     {/* Hidden input for keyboard handling */}
+           <input
+             ref={hiddenInputRef}
+             value={userInput}
+             onChange={e => {
+               const newValue = e.target.value;
+               const wordCount = newValue.trim().split(/\s+/).filter(word => word.length > 0).length;
+               
+               // Only update if within word limit or if deleting
+               if (wordCount <= MAX_WORDS || newValue.length < userInput.length) {
+                 setUserInput(newValue);
+               }
+             }}
+             onKeyDown={handleKeyDown}
+             disabled={isInputDisabled}
+             style={{
+               position: 'absolute',
+               left: '-9999px',
+               opacity: 0,
+             }}
+             autoFocus
+             spellCheck={false}
+             onTouchStart={() => {
+               // Ensure input is focused when touched directly
+               focusInput();
+             }}
+             onBlur={() => {
+               // Re-focus if input loses focus in static state
+               if (!isInputDisabled) {
+                 setTimeout(() => focusInput(), 100);
+               }
+             }}
+           />
           
           {/* Visual representation with scrollable input */}
           <div style={{ 
