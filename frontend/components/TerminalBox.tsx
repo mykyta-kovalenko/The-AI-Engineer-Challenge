@@ -363,17 +363,6 @@ export default function TerminalBox() {
     }
   };
 
-  const handleTerminalClick = () => {
-    // Only focus if user isn't in the middle of selecting text and not typing
-    if (!isTyping && !isResponding) {
-      setTimeout(() => {
-        const selection = window.getSelection();
-        if (!selection || selection.isCollapsed) {
-          focusInput();
-        }
-      }, 0);
-    }
-  };
 
   // Keyboard shortcut for emergency reset (Ctrl+R or Cmd+R)
   useEffect(() => {
@@ -391,40 +380,6 @@ export default function TerminalBox() {
 
   // Determine if input should be disabled
   const isInputDisabled = isResponding || isTyping;
-
-  // Global click handler to maintain input focus
-  useEffect(() => {
-    const handleGlobalClick = (e: MouseEvent) => {
-      // Don't interfere if user is typing or system is responding
-      if (isTyping || isResponding) {
-        return;
-      }
-
-      // Don't interfere if user is clicking on interactive elements
-      const target = e.target as HTMLElement;
-      if (target.tagName === 'BUTTON' || 
-          target.tagName === 'INPUT' || 
-          target.tagName === 'A' ||
-          target.closest('button')) {
-        return;
-      }
-
-      // Check if user is selecting text
-      setTimeout(() => {
-        const selection = window.getSelection();
-        if (!selection || selection.isCollapsed) {
-          focusInput();
-        }
-      }, 0);
-    };
-
-    // Add global click listener
-    document.addEventListener('click', handleGlobalClick);
-    
-    return () => {
-      document.removeEventListener('click', handleGlobalClick);
-    };
-  }, [isTyping, isResponding]);
 
   // Auto-focus when input becomes available
   useEffect(() => {
@@ -449,17 +404,6 @@ export default function TerminalBox() {
        style={{ 
          height: '70vh',
          maxWidth: '600px',
-       }}
-       onTouchStart={(e) => {
-         // For mobile: always focus input when user touches anywhere on terminal
-         console.log('Main container touched');
-         e.preventDefault();
-         e.stopPropagation();
-         focusInput();
-       }}
-       onClick={() => {
-         // For desktop: focus input when clicking anywhere
-         focusInput();
        }}
      >
       <div
@@ -540,14 +484,7 @@ export default function TerminalBox() {
              display: 'flex',
              flexDirection: 'column',
              padding: '16px',
-           }}
-           onClick={handleTerminalClick}
-           onTouchStart={(e) => {
-             // Mobile: focus input on touch
-             console.log('Terminal content touched');
-             e.preventDefault();
-             e.stopPropagation();
-             focusInput();
+             minHeight: 0, // Important for flex layouts
            }}
          >
         {/* Scrollable content area */}
@@ -556,11 +493,11 @@ export default function TerminalBox() {
           style={{ 
             flex: 1,
             overflowY: 'auto',
-            marginBottom: '16px',
             fontFamily: 'Courier New, monospace',
             fontSize: '16px',
             lineHeight: '1.4',
             color: '#00ff41',
+            minHeight: 0, // Important for flex scrolling
           }}
         >
           {messages.map((message) => (
@@ -696,70 +633,59 @@ export default function TerminalBox() {
           </div>
         )}
 
-        {/* Fixed input at bottom with scrollable content */}
-        <div className="input-area" style={{ 
-          borderTop: '1px solid rgba(0,255,65,0.3)',
-          paddingTop: '12px',
-          opacity: isInputDisabled ? 0.5 : 1
-        }}>
-                     {/* Mobile-friendly input for keyboard handling */}
-           <input
-             ref={hiddenInputRef}
-             value={userInput}
-             onChange={e => {
-               const newValue = e.target.value;
-               const wordCount = newValue.trim().split(/\s+/).filter(word => word.length > 0).length;
-               
-               // Only update if within word limit or if deleting
-               if (wordCount <= MAX_WORDS || newValue.length < userInput.length) {
-                 setUserInput(newValue);
-               }
-             }}
-             onKeyDown={handleKeyDown}
-             disabled={isInputDisabled}
-             style={{
-               position: 'absolute',
-               top: 0,
-               left: 0,
-               width: '100%',
-               height: '100%',
-               opacity: 0,
-               background: 'transparent',
-               border: 'none',
-               outline: 'none',
-               fontSize: '16px', // Prevents zoom on iOS
-               zIndex: 1000,
-               pointerEvents: 'auto',
-             }}
-             autoFocus
-             spellCheck={false}
-             autoComplete="off"
-             autoCorrect="off"
-             autoCapitalize="off"
-             onTouchStart={(e) => {
-               console.log('Input touched directly');
-               e.stopPropagation();
-               if (hiddenInputRef.current) {
-                 hiddenInputRef.current.focus();
-               }
-             }}
-             onFocus={() => {
-               console.log('Input focused');
-             }}
-             onBlur={() => {
-               console.log('Input blurred');
-               // Re-focus if input loses focus in static state
-               if (!isInputDisabled) {
-                 setTimeout(() => {
-                   if (hiddenInputRef.current) {
-                     hiddenInputRef.current.focus();
-                   }
-                 }, 100);
-               }
-             }}
-           />
+        {/* Fixed input area at bottom */}
+        <div 
+          style={{ 
+            flexShrink: 0, // Don't shrink this area
+            borderTop: '1px solid rgba(0,255,65,0.3)',
+            // padding: '12px 0',
+            paddingTop: '8px',
+            marginTop: '12px',
+            position: 'relative',
+            opacity: isInputDisabled ? 0.5 : 1
+          }}
+          onTouchStart={(e) => {
+            // Only focus when touching the input area
+            console.log('Input area touched');
+            e.stopPropagation();
+            focusInput();
+          }}
+          onClick={(e) => {
+            // Only focus when clicking the input area
+            console.log('Input area clicked');
+            e.stopPropagation();
+            focusInput();
+          }}
+        >
+          {/* Hidden input for keyboard handling */}
+          <input
+            ref={hiddenInputRef}
+            value={userInput}
+            onChange={e => {
+              const newValue = e.target.value;
+              const wordCount = newValue.trim().split(/\s+/).filter(word => word.length > 0).length;
+              
+              // Only update if within word limit or if deleting
+              if (wordCount <= MAX_WORDS || newValue.length < userInput.length) {
+                setUserInput(newValue);
+              }
+            }}
+            onKeyDown={handleKeyDown}
+            disabled={isInputDisabled}
+            style={{
+              position: 'absolute',
+              left: '-9999px',
+              opacity: 0,
+              pointerEvents: 'none',
+            }}
+            autoFocus
+            spellCheck={false}
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+          />
           
-          {/* Visual representation with scrollable input */}
+          {/* Visual input display */}
           <div style={{ 
             display: 'flex', 
             alignItems: 'flex-start',
@@ -767,8 +693,9 @@ export default function TerminalBox() {
             fontSize: '16px',
             lineHeight: '1.4',
             color: '#00ff41',
+            minHeight: '1.2em',
           }}>
-            <span style={{ marginRight: '8px', flexShrink: 0, paddingTop: '2px' }}>{'>'}</span>
+            <span style={{ marginRight: '8px', flexShrink: 0 }}>{'>'}</span>
             <div 
               ref={inputDisplayRef}
               style={{ 
@@ -776,9 +703,8 @@ export default function TerminalBox() {
                 wordBreak: 'break-all',
                 whiteSpace: 'pre-wrap',
                 minHeight: '1.4em',
-                maxHeight: '6.8em',
+                maxHeight: '6.4em', // Allow more lines
                 overflowY: 'auto',
-                position: 'relative',
                 paddingRight: '4px',
               }}
             >
