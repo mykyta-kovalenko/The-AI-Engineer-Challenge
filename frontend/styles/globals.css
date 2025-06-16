@@ -1,0 +1,92 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body, html {
+  background: #000 !important;
+  font-family: 'Courier New', Courier, monospace;
+  overflow: hidden; /* Hide all scrollbars on main page */
+}
+
+/* Authentic terminal green - muted, not bright */
+:root {
+  --terminal-green: #00ff41;
+  --terminal-green-dim: #008f11;
+  --terminal-green-dark: #004400;
+}
+
+/* CRT scanlines - subtle */
+.crt-scanlines {
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent,
+    transparent 1px,
+    rgba(0,255,65,0.03) 2px,
+    transparent 3px
+  );
+}
+
+/* Remove the grid - it's not authentic */
+.crt-grid {
+  display: none;
+}
+
+/* Authentic blinking cursor */
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+.animate-blink {
+  animation: blink 1s infinite;
+}
+
+/* Custom scrollbar styling for terminal theme */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 255, 65, 0.3);
+  border-radius: 4px;
+  border: 1px solid rgba(0, 255, 65, 0.1);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 255, 65, 0.5);
+}
+
+::-webkit-scrollbar-corner {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 255, 65, 0.3) rgba(0, 0, 0, 0.3);
+}
+
+/* Terminal input styling */
+.terminal-input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--terminal-green);
+  font-family: 'Courier New', Courier, monospace;
+  font-size: inherit;
+  caret-color: transparent; /* Hide default cursor */
+  width: 100%;
+}
+
+.terminal-input::placeholder {
+  color: var(--terminal-green-dim);
+}

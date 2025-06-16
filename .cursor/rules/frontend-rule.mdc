@@ -11,3 +11,38 @@ alwaysApply: false
 - You should use Next.js as it works best with Vercel. 
 - This frontend will ultimately be deployed on Vercel, but it should be possible to test locally. 
 - Always provide users with a way to run the created UI once you have created it.
+- Design a web-based GPT-like AI interface with a retro cyberpunk Matrix aesthetic, optimized for laptop screens.
+
+🔳 Layout
+The UI is a single, minimal chat window centered on the screen.
+
+It should resemble an old CRT terminal: rounded corners, subtle green phosphor glow, slightly curved screen effect (optional).
+
+Background should feature the Matrix "digital rain"—faintly animated or blurred—and green horizontal scanlines, to mimic CRT displays.
+
+💬 Text / Chat
+The system sends an animated typing message, one character at a time:
+
+First line: Wake up, 192.168.0.13... (you can pick a users IP or hostname for flavor)
+
+Pause, then second line: This is your prompt. Use it wisely.
+
+Text is glowing neon green, using a monospaced font like Courier New or Monaco.
+
+Blinking cursor (_) appears after the message, as if ready for input.
+
+🖥️ Chat Input
+Below the message, there should be a simple input field for user prompts.
+
+Styled like an old-school hacker terminal: no modern buttons, just a line where you type.
+
+No send button, no model selector, no extras — just pure minimalism.
+
+🎨 Style
+Mood: Retro cyberpunk, like Neo’s computer in The Matrix (1999).
+
+Green-on-black only.
+
+Slight distortion/glow around the chat box edges, to mimic CRT screen bleeding.
+
+The overall tone should feel like a serious but stylish throwback to 90s hacking interfaces.
