@@ -49,7 +49,7 @@ Brazilian Jiu-Jitsu (BJJ) is a grappling-based martial art that emphasizes techn
 
 🛠️ Issues Identified:
 
-- Summary was not visually marked as such (missing "Summary:" or bullet structure).
+- Summary was not visually marked as such.
 
 ✅ What was successful:
 

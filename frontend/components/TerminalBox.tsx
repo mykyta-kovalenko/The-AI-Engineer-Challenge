@@ -8,14 +8,14 @@ Maintain a slightly mysterious, hacker-like tone befitting the matrix aesthetic.
 Be helpful but authentic to the terminal environment.
 
 FORMAT RULES:
-- Insert at least 2 line breaks between paragraphs and sections.
-- Do not put dot inside quotes like this: "object.". If you need to end the sentence, put a dot after the quotes.
+- Always insert 2 line breaks between major paragraphs and sections.
+- NEVER EVER put punctuation inside quotes. Wrong: "object." Correct: "object".
+- If a sentence ends with a quote, put the period AFTER the closing quote: She said "hello".
 - Do NOT use asterisks (*), underscores (_), or backticks (\`) for formatting — just plain text.
 - Use dash-based bullet points (-) for lists.
 - Avoid Markdown, code blocks, and any characters not suited for a terminal display.
 - NEVER use the ">" symbol — it is reserved for user input and prompt prefixing.
 - When asked to provide a summary, always begin with the label: Summary:.
-- Use a line break after Summary:.
 - Keep summaries structured and readable — use either short paragraphs or simple dash bullets if appropriate.
 - When solving a math or logic problem, show clean step-by-step reasoning when necessary and always label the final result clearly using the prefix: Final answer:.
 - Use plain line breaks to separate steps, and avoid excessive explanation.
@@ -288,15 +288,41 @@ export default function TerminalBox() {
           throw new Error('Empty response received from server');
         }
         
-        // Split response into lines for proper typing animation
-        const responseLines = response.split('\n').filter(line => line.trim() !== '');
-        if (responseLines.length === 0) {
-          responseLines.push(response); // Fallback if no line breaks
+        // Split response into lines while preserving intentional spacing
+        const responseLines = response.split('\n');
+        
+        // Clean up excessive empty lines but preserve paragraph spacing
+        const cleanedLines: string[] = [];
+        let consecutiveEmpty = 0;
+        
+        for (let i = 0; i < responseLines.length; i++) {
+          const line = responseLines[i];
+          const trimmedLine = line.trim();
+          
+          if (trimmedLine === '') {
+            consecutiveEmpty++;
+            // Allow up to 2 consecutive empty lines for paragraph spacing
+            if (consecutiveEmpty <= 2) {
+              cleanedLines.push('');
+            }
+          } else {
+            consecutiveEmpty = 0;
+            cleanedLines.push(line);
+          }
         }
+        
+        // Remove trailing empty lines
+        while (cleanedLines.length > 0 && cleanedLines[cleanedLines.length - 1] === '') {
+          cleanedLines.pop();
+        }
+        
+        const finalLines = cleanedLines.length > 0 ? cleanedLines : [response];
+        console.log('Original response:', JSON.stringify(response));
+        console.log('Final lines for typing:', finalLines);
         
         const newResponseMessage = { 
           type: 'response' as const, 
-          content: responseLines, 
+          content: finalLines, 
           id: messageIdRef.current++ 
         };
         console.log('Response lines for TypingText:', responseLines);
