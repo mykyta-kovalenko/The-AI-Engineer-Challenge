@@ -150,9 +150,7 @@ Hey, I just wanted to give you a heads-up that the report isn’t quite ready ye
 
 🚧 Advanced Build:
 
-<img src="assets/dev_msg_diff.png" alt="Developer Message Diff" width="1020" height="auto">
-
-<img src="assets/dev_msg_final.png" alt="Updated Developer Message" width="800" height="auto">
+<img src="assets/dev_msg.png" alt="Updated Developer Message" width="800" height="auto">
 
 🛠️ What was done:
 
@@ -165,4 +163,12 @@ I refined the system prompt to cover:
 - Style guidelines (e.g., use quotes like `"object"` and avoid special formatting characters)
 - Spacing, list structure, and terminal-safe output rules
 
-No backend or UI code was changed. All improvements came from updating model behavior via natural language instructions.
+Also, I had a line spacing issue and I resolved it with just vibes:
+
+<img src="assets/advanced_build_lines.png" alt="Pure Vibe" width="600" height="auto">
+
+Here are some examples of the new prompts:
+
+<img src="assets/new_prompt_2.png" alt="Prompt 2" width="300" height="auto">
+<img src="assets/new_prompt_1.png" alt="Prompt 1" width="300" height="auto">
+<img src="assets/new_prompt_3.png" alt="Prompt 1" width="300" height="auto">
