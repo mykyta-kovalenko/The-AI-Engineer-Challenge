@@ -19,7 +19,7 @@ Explain the concept of object-oriented programming in simple terms to a complete
 
 🛠️ Issues Identified:
 
-- Improper spacing between paragraphs and sections.
+- Improper line breaks between paragraphs and sections.
 - Use of "objects." with punctuation inside quotes.
 
 ✅ What was successful:
