@@ -17,7 +17,7 @@ export default function TerminalBox() {
     'This is your prompt. Use it wisely.'
   ]);
   const [messages, setMessages] = useState<Array<{type: 'user' | 'system' | 'response' | 'error', content: string | string[], id: number}>>([]);
-  const MAX_WORDS = 50;
+  const MAX_WORDS = 400;
   const [isResponding, setIsResponding] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
   const [showInitialPrompt, setShowInitialPrompt] = useState(true);
