@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from openai import OpenAI
 import os
 import tempfile
-from typing import Optional, Dict
+from typing import Optional, List
 from dotenv import load_dotenv
 from datetime import datetime
 import numpy as np
@@ -20,26 +20,6 @@ load_dotenv(dotenv_path="../.env.local")
 
 # Initialize FastAPI application with a title
 app = FastAPI(title="OpenAI Chat API with Multi-File RAG")
-
-# Simple in-memory session storage for Vercel deployment
-# This will reset on each serverless function cold start, which is fine for demo purposes
-session_data: Dict[str, Dict] = {}
-
-def get_session_id(request):
-    """Generate a simple session ID from request headers"""
-    user_agent = request.headers.get('user-agent', 'unknown')
-    # Simple session ID for demonstration
-    return hash(user_agent) % 10000
-
-def get_session_data(session_id: str):
-    """Get or create session data"""
-    if session_id not in session_data:
-        session_data[session_id] = {
-            'vector_db': None,
-            'uploaded_files': {},
-            'files_loaded': False
-        }
-    return session_data[session_id]
 
 # Supported file types
 SUPPORTED_EXTENSIONS = {
@@ -59,14 +39,13 @@ SUPPORTED_EXTENSIONS = {
     '.yaml': 'YAML Configuration'
 }
 
-# Configure CORS (Cross-Origin Resource Sharing) middleware
-# This allows the API to be accessed from different domains/origins
+# Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows requests from any origin
-    allow_credentials=True,  # Allows cookies to be included in requests
-    allow_methods=["*"],  # Allows all HTTP methods (GET, POST, etc.)
-    allow_headers=["*"],  # Allows all headers in requests
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 class UniversalFileLoader:
@@ -113,24 +92,29 @@ class UniversalFileLoader:
         
         raise ValueError(f"Could not decode file {self.filename} with any supported encoding")
 
-# Define the data model for chat requests using Pydantic
-# This ensures incoming request data is properly validated
+# Data models
+class ProcessedChunk(BaseModel):
+    text: str
+    filename: str
+
+class FileInfo(BaseModel):
+    filename: str
+    file_type: str
+    uploaded_at: str
+    chunks_count: int
+    file_size: int
+    processed_chunks: List[ProcessedChunk]
+
 class ChatRequest(BaseModel):
-    developer_message: str  # Message from the developer/system
-    user_message: str      # Message from the user
-    model: Optional[str] = "gpt-4.1-mini"  # Optional model selection with default
+    developer_message: str
+    user_message: str
+    model: Optional[str] = "gpt-4.1-mini"
+    # Frontend passes all processed file data
+    uploaded_files: Optional[List[FileInfo]] = []
 
 # Define the main chat endpoint that handles POST requests
 @app.post("/api/chat")
-async def chat(chat_request: ChatRequest, request: Request):
-    # Get session ID and session data
-    session_id = str(get_session_id(request))
-    session = get_session_data(session_id)
-    
-    vector_db = session['vector_db']
-    uploaded_files = session['uploaded_files']
-    files_loaded = session['files_loaded']
-    
+async def chat(chat_request: ChatRequest):
     try:
         user_message_lower = chat_request.user_message.lower()
         
@@ -188,22 +172,14 @@ For regular conversation, just type your message without the cmd: prefix."""
             
             # Show current files command
             elif command == "files":
-                if not uploaded_files:
+                if not chat_request.uploaded_files:
                     message = "No files currently uploaded."
                 else:
                     file_list = []
-                    for filename, metadata in uploaded_files.items():
-                        file_ext = os.path.splitext(filename)[1].lower()
-                        file_type = SUPPORTED_EXTENSIONS.get(file_ext, "Unknown")
-                        upload_time = metadata.get("uploaded_at", "Unknown")
-                        file_list.append(f"• {filename} ({file_type}) - Uploaded: {upload_time}")
+                    for file_info in chat_request.uploaded_files:
+                        file_list.append(f"• {file_info.filename} ({file_info.file_type}) - Uploaded: {file_info.uploaded_at}")
                     
-                    message = f"Currently uploaded files ({len(uploaded_files)}):\n\n" + "\n".join(file_list)
-                    
-                    # Simple check for RAG availability
-                    if not files_loaded or vector_db is None:
-                        message += "\n\n⚠️  WARNING: Files uploaded but search index not ready."
-                        message += "\nTry re-uploading files if you encounter issues."
+                    message = f"Currently uploaded files ({len(chat_request.uploaded_files)}):\n\n" + "\n".join(file_list)
                 
                 return {
                     "type": "file_list",
@@ -211,13 +187,13 @@ For regular conversation, just type your message without the cmd: prefix."""
                     "streaming": False
                 }
             
-            # Delete file command
+            # Delete file command  
             elif command.startswith("delete "):
                 filename_to_delete = command[7:].strip()  # Remove "delete " prefix
                 
                 if not filename_to_delete:
-                    if uploaded_files:
-                        available_files = list(uploaded_files.keys())
+                    if chat_request.uploaded_files:
+                        available_files = [file_info.filename for file_info in chat_request.uploaded_files]
                         return {
                             "type": "error", 
                             "message": f"Please specify a filename to delete. Available files: {', '.join(available_files)}",
@@ -231,31 +207,25 @@ For regular conversation, just type your message without the cmd: prefix."""
                         }
                 
                 # Look for exact filename match (case-insensitive)
-                actual_filename = None
-                for uploaded_filename in uploaded_files.keys():
-                    if filename_to_delete.lower() == uploaded_filename.lower():
-                        actual_filename = uploaded_filename
+                file_to_remove = None
+                for file_info in chat_request.uploaded_files:
+                    if filename_to_delete.lower() == file_info.filename.lower():
+                        file_to_remove = file_info
                         break
                 
-                if actual_filename:
-                    del uploaded_files[actual_filename]
-                    
-                    # If no files left, clear vector database
-                    if not uploaded_files:
-                        session['vector_db'] = None
-                        session['files_loaded'] = False
-                        message = f"File '{actual_filename}' deleted successfully. No files remaining."
-                    else:
-                        message = f"File '{actual_filename}' deleted successfully. {len(uploaded_files)} files remaining."
+                if file_to_remove:
+                    # Return the updated file list (frontend will handle the removal)
+                    updated_files = [f for f in chat_request.uploaded_files if f.filename != file_to_remove.filename]
                     
                     return {
                         "type": "file_deleted",
-                        "message": message,
+                        "message": f"File '{file_to_remove.filename}' deleted successfully. {len(updated_files)} files remaining.",
+                        "updated_files": [f.dict() for f in updated_files],
                         "streaming": False
                     }
                 else:
-                    if uploaded_files:
-                        available_files = list(uploaded_files.keys())
+                    if chat_request.uploaded_files:
+                        available_files = [file_info.filename for file_info in chat_request.uploaded_files]
                         return {
                             "type": "error",
                             "message": f"File '{filename_to_delete}' not found. Available files: {', '.join(available_files)}",
@@ -279,41 +249,39 @@ For regular conversation, just type your message without the cmd: prefix."""
         # Initialize OpenAI client
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         
-        # Check if we have files but no vector database (simple error handling)
-        if uploaded_files and not vector_db:
-            error_message = f"""⚠️  FILES UPLOADED BUT NOT INDEXED
-
-You have {len(uploaded_files)} file(s) uploaded but they are not indexed for search.
-
-Your files: {', '.join(uploaded_files.keys())}
-
-Please try re-uploading your files using 'cmd:upload' to restore search functionality."""
-            
-            return {
-                "type": "error",
-                "message": error_message,
-                "streaming": False
-            }
-        
-        # Determine if we should use RAG or regular chat
-        if files_loaded and vector_db and uploaded_files:
-            # RAG-enhanced chat
-            async def generate_rag():
-                # Get relevant context from vector database
-                relevant_chunks = vector_db.search_by_text(
-                    chat_request.user_message, 
-                    k=3, 
-                    return_as_text=True
-                )
+        # If we have uploaded files, rebuild vector database and use RAG
+        if chat_request.uploaded_files:
+            try:
+                # Rebuild vector database from processed chunks
+                vector_db = VectorDatabase()
                 
-                # Create context from relevant chunks
-                context = "\n\n".join(relevant_chunks) if relevant_chunks else ""
+                # Collect all chunks from all files
+                all_chunks = []
+                for file_info in chat_request.uploaded_files:
+                    for chunk in file_info.processed_chunks:
+                        all_chunks.append(f"[{chunk.filename}] {chunk.text}")
                 
-                # Create file context information
-                file_context = f"Currently loaded files: {', '.join(uploaded_files.keys())}"
-                
-                # Enhance the developer message with file context
-                enhanced_developer_message = f"""{chat_request.developer_message}
+                if all_chunks:
+                    # Build vector database from chunks
+                    vector_db = await vector_db.abuild_from_list(all_chunks)
+                    
+                    # RAG-enhanced chat
+                    async def generate_rag():
+                        # Get relevant context from vector database
+                        relevant_chunks = vector_db.search_by_text(
+                            chat_request.user_message, 
+                            k=3, 
+                            return_as_text=True
+                        )
+                        
+                        # Create context from relevant chunks
+                        context = "\n\n".join(relevant_chunks) if relevant_chunks else ""
+                        
+                        # Create file context information
+                        file_context = f"Currently loaded files: {[file_info.filename for file_info in chat_request.uploaded_files]}"
+                        
+                        # Enhance the developer message with file context
+                        enhanced_developer_message = f"""{chat_request.developer_message}
 
 You have access to content from uploaded files. Use this content to answer the user's question:
 
@@ -324,38 +292,52 @@ DOCUMENT CONTENT:
 
 Please answer the user's question based on the document content above. If the question cannot be answered from the documents, say so clearly."""
 
-                # Create streaming response with RAG context
-                stream = client.chat.completions.create(
-                    model=chat_request.model,
-                    messages=[
-                        {"role": "developer", "content": enhanced_developer_message},
-                        {"role": "user", "content": chat_request.user_message}
-                    ],
-                    stream=True
-                )
-                
-                for chunk in stream:
-                    if chunk.choices[0].delta.content is not None:
-                        yield chunk.choices[0].delta.content
+                        # Create streaming response with RAG context
+                        stream = client.chat.completions.create(
+                            model=chat_request.model,
+                            messages=[
+                                {"role": "developer", "content": enhanced_developer_message},
+                                {"role": "user", "content": chat_request.user_message}
+                            ],
+                            stream=True
+                        )
+                        
+                        for chunk in stream:
+                            if chunk.choices[0].delta.content is not None:
+                                yield chunk.choices[0].delta.content
 
-            return StreamingResponse(generate_rag(), media_type="text/plain")
-        else:
-            # Regular chat without RAG
-            async def generate():
-                stream = client.chat.completions.create(
-                    model=chat_request.model,
-                    messages=[
-                        {"role": "developer", "content": chat_request.developer_message},
-                        {"role": "user", "content": chat_request.user_message}
-                    ],
-                    stream=True
-                )
-                
-                for chunk in stream:
-                    if chunk.choices[0].delta.content is not None:
-                        yield chunk.choices[0].delta.content
+                    return StreamingResponse(generate_rag(), media_type="text/plain")
+            
+            except Exception as e:
+                # If RAG fails, fall back to regular chat but inform user
+                error_message = f"""⚠️  RAG PROCESSING ERROR
 
-            return StreamingResponse(generate(), media_type="text/plain")
+Failed to process uploaded files for search: {str(e)}
+
+Falling back to regular chat without file context."""
+                
+                return {
+                    "type": "error",
+                    "message": error_message,
+                    "streaming": False
+                }
+        
+        # Regular chat without RAG
+        async def generate():
+            stream = client.chat.completions.create(
+                model=chat_request.model,
+                messages=[
+                    {"role": "developer", "content": chat_request.developer_message},
+                    {"role": "user", "content": chat_request.user_message}
+                ],
+                stream=True
+            )
+            
+            for chunk in stream:
+                if chunk.choices[0].delta.content is not None:
+                    yield chunk.choices[0].delta.content
+
+        return StreamingResponse(generate(), media_type="text/plain")
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -367,14 +349,7 @@ async def health_check():
 
 # Define the file upload and indexing endpoint
 @app.post("/api/upload")
-async def upload_file(file: UploadFile = File(...), request: Request = None):
-    # Get session ID and session data
-    session_id = str(get_session_id(request))
-    session = get_session_data(session_id)
-    
-    vector_db = session['vector_db']
-    uploaded_files = session['uploaded_files']
-    
+async def upload_file(file: UploadFile = File(...)):
     try:
         # Validate file type
         if not file.filename:
@@ -386,13 +361,6 @@ async def upload_file(file: UploadFile = File(...), request: Request = None):
             raise HTTPException(
                 status_code=400, 
                 detail=f"Unsupported file type '{file_ext}'. Supported types: {supported_exts}"
-            )
-        
-        # Check if file already exists
-        if file.filename in uploaded_files:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"File '{file.filename}' is already uploaded. Please delete it first or rename your file."
             )
         
         # Read the uploaded file
@@ -418,40 +386,29 @@ async def upload_file(file: UploadFile = File(...), request: Request = None):
             if not chunks:
                 raise HTTPException(status_code=400, detail="No text chunks created from file.")
             
-            # Add filename prefix to chunks for identification
-            prefixed_chunks = [f"[{file.filename}] {chunk}" for chunk in chunks]
+            # Create processed chunks
+            processed_chunks = []
+            for chunk in chunks:
+                processed_chunks.append(ProcessedChunk(
+                    text=chunk,
+                    filename=file.filename
+                ))
             
-            # Create or update vector database
-            if vector_db is None:
-                vector_db = VectorDatabase()
-                vector_db = await vector_db.abuild_from_list(prefixed_chunks)
-            else:
-                # Add new chunks to existing vector database
-                new_embeddings = await vector_db.embedding_model.async_get_embeddings(prefixed_chunks)
-                for chunk, embedding in zip(prefixed_chunks, new_embeddings):
-                    vector_db.insert(chunk, np.array(embedding))
-            
-            # Update session state
-            uploaded_files[file.filename] = {
-                "filename": file.filename,
-                "file_type": SUPPORTED_EXTENSIONS[file_ext],
-                "uploaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "chunks_count": len(chunks),
-                "file_size": len(file_content)
-            }
-            
-            # Update session with new data
-            session['vector_db'] = vector_db
-            session['uploaded_files'] = uploaded_files
-            session['files_loaded'] = True
+            # Create file info with all processed data
+            file_info = FileInfo(
+                filename=file.filename,
+                file_type=SUPPORTED_EXTENSIONS[file_ext],
+                uploaded_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                chunks_count=len(chunks),
+                file_size=len(file_content),
+                processed_chunks=processed_chunks
+            )
             
             return {
                 "success": True,
                 "message": f"File '{file.filename}' ({SUPPORTED_EXTENSIONS[file_ext]}) uploaded and indexed successfully! You can now ask questions about it.",
-                "chunks_created": len(chunks),
-                "filename": file.filename,
-                "file_type": SUPPORTED_EXTENSIONS[file_ext],
-                "total_files": len(uploaded_files)
+                "file_info": file_info.dict(),
+                "chunks_created": len(chunks)
             }
             
         finally:

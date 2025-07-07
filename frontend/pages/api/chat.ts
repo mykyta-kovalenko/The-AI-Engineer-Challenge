@@ -6,8 +6,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { developer_message, user_message, model = 'gpt-4.1-mini' } = req.body;
-    console.log('API route received request:', { user_message, model });
+    const { developer_message, user_message, model = 'gpt-4.1-mini', uploaded_files = [] } = req.body;
+    console.log('API route received request:', { user_message, model, uploaded_files_count: uploaded_files.length });
 
     if (!developer_message || !user_message) {
       return res.status(400).json({ error: 'Missing required fields' });
@@ -27,6 +27,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         developer_message,
         user_message,
         model,
+        uploaded_files,
       }),
     });
 

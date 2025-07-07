@@ -22,14 +22,27 @@ FORMAT RULES:
 
 Keep your responses clean and readable.`;
 
+// Types for file management
+type ProcessedChunk = {
+  text: string;
+  filename: string;
+};
+
+type FileInfo = {
+  filename: string;
+  file_type: string;
+  uploaded_at: string;
+  chunks_count: number;
+  file_size: number;
+  processed_chunks: ProcessedChunk[];
+};
+
 export default function TerminalBox() {
   const [userInput, setUserInput] = useState('');
-  const [userIP, setUserIP] = useState('user');
-  const [initialPrompt, setInitialPrompt] = useState([
-    `Wake up, ${userIP}..`,
-    'This is your prompt. Use it wisely.'
-  ]);
-  const [messages, setMessages] = useState<Array<{type: 'user' | 'system' | 'response' | 'error', content: string | string[], id: number}>>([]);
+  const [userIP, setUserIP] = useState('user.location');
+  const [initialPrompt, setInitialPrompt] = useState<string[]>([]);
+  const [messages, setMessages] = useState<{type: string, content: string[], id: number}[]>([]);
+  const [uploadedFiles, setUploadedFiles] = useState<FileInfo[]>([]);
   const MAX_WORDS = 400;
   const [isResponding, setIsResponding] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
@@ -37,9 +50,10 @@ export default function TerminalBox() {
   const hiddenInputRef = useRef<HTMLInputElement>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const inputDisplayRef = useRef<HTMLDivElement>(null);
-  const messageIdRef = useRef(1);
+  const messageIdRef = useRef(0);
   const abortControllerRef = useRef<AbortController | null>(null);
   const activeTypingRefs = useRef<Set<TypingTextRef>>(new Set());
+  const typingRef = useRef<TypingTextRef>(null);
 
   // Fetch user's real IP address and mask it for privacy
   useEffect(() => {
@@ -147,31 +161,39 @@ export default function TerminalBox() {
 
   // Emergency recovery - reset typing state if stuck
   const handleEmergencyReset = () => {
-    console.log('Emergency reset triggered - cancelling all operations');
+    console.log('Emergency reset triggered');
     
-    // Cancel ongoing API request
+    // Cancel any ongoing request
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
-      console.log('API request cancelled');
     }
     
-    // Cancel all active typing animations
-    activeTypingRefs.current.forEach(typingRef => {
-      if (typingRef) {
-        typingRef.cancel();
-      }
-    });
-    activeTypingRefs.current.clear();
-    console.log('All typing animations cancelled');
+    // Cancel any ongoing typing animation
+    if (typingRef.current) {
+      typingRef.current.cancel();
+    }
     
-    // Reset all states
+    // Reset states
     setIsTyping(false);
     setIsResponding(false);
-    setShowInitialPrompt(false);
+    setUserInput('');
     
-    // Focus input after reset
-    focusInput();
+    // Add reset message
+    const resetMessage = { 
+      type: 'system' as const, 
+      content: ['[SYSTEM RESET]', '', 'Terminal ready for input.'], 
+      id: messageIdRef.current++ 
+    };
+    setMessages(prev => [...prev, resetMessage]);
+    
+    // Focus input
+    setTimeout(() => {
+      const input = document.querySelector('input') as HTMLInputElement;
+      if (input) {
+        input.focus();
+      }
+    }, 100);
   };
 
   // Helper function to register typing ref
@@ -204,7 +226,8 @@ export default function TerminalBox() {
         body: JSON.stringify({
           developer_message: DEVELOPER_MESSAGE,
           user_message: userMessage,
-          model: 'gpt-4.1-mini'
+          model: 'gpt-4.1-mini',
+          uploaded_files: uploadedFiles  // Pass all uploaded file data
         }),
         signal: abortController.signal, // Add abort signal
       });
@@ -220,6 +243,12 @@ export default function TerminalBox() {
       const contentType = response.headers.get('content-type');
       if (contentType && contentType.includes('application/json')) {
         const jsonResponse = await response.json();
+        
+        // Handle file deletion updates
+        if (jsonResponse.type === 'file_deleted' && jsonResponse.updated_files) {
+          setUploadedFiles(jsonResponse.updated_files);
+        }
+        
         if (jsonResponse.type === 'upload_request') {
           return jsonResponse.message;
         } else if (jsonResponse.type === 'file_list' || 
@@ -305,7 +334,20 @@ export default function TerminalBox() {
       }
 
       const result = await response.json();
-      if (result.success) {
+      if (result.success && result.file_info) {
+        // Check if file already exists
+        const existingFileIndex = uploadedFiles.findIndex(f => f.filename === result.file_info.filename);
+        
+        if (existingFileIndex >= 0) {
+          // Replace existing file
+          const newFiles = [...uploadedFiles];
+          newFiles[existingFileIndex] = result.file_info;
+          setUploadedFiles(newFiles);
+        } else {
+          // Add new file
+          setUploadedFiles(prev => [...prev, result.file_info]);
+        }
+        
         return result.message;
       } else {
         throw new Error(result.message || 'Upload failed');
@@ -381,13 +423,13 @@ export default function TerminalBox() {
       
       // Upload command - handle directly in frontend
       if (userMessageLower === 'cmd:upload') {
-        // Add user message
-        const newUserMessage = { 
-          type: 'user' as const, 
-          content: userMessage, 
-          id: messageIdRef.current++ 
-        };
-        setMessages(prev => [...prev, newUserMessage]);
+              // Add user message
+      const newUserMessage = { 
+        type: 'user' as const, 
+        content: [userMessage], 
+        id: messageIdRef.current++ 
+      };
+      setMessages(prev => [...prev, newUserMessage]);
         
         // Trigger file upload
         triggerFileUpload();
@@ -402,7 +444,7 @@ export default function TerminalBox() {
       // Add user message
       const newUserMessage = { 
         type: 'user' as const, 
-        content: userMessage, 
+        content: [userMessage], 
         id: messageIdRef.current++ 
       };
       setMessages(prev => [...prev, newUserMessage]);
