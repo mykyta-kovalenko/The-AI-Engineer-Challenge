@@ -63,6 +63,8 @@ export default function TerminalBox() {
         const newPrompt = [
           `Wake up, ${maskedIP}..`,
           'This is your prompt. Use it wisely.',
+          '',
+          'Type "cmd:help" to see available commands.',
         ];
         setInitialPrompt(newPrompt);
         
@@ -76,7 +78,9 @@ export default function TerminalBox() {
         // Keep default IP and initialize messages
         const fallbackPrompt = [
           'Wake up, user..',
-          'This is your prompt. Use it wisely.'
+          'This is your prompt. Use it wisely.',
+          '',
+          'Type "cmd:help" to see available commands.'
         ];
         setMessages([{ type: 'system', content: fallbackPrompt, id: 0 }]);
         setIsTyping(true);
@@ -212,6 +216,21 @@ export default function TerminalBox() {
         throw new Error(errorData.detail || `HTTP ${response.status}: ${response.statusText}`);
       }
 
+      // Check if this is a special response type (upload_request, file_list, etc.)
+      const contentType = response.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        const jsonResponse = await response.json();
+        if (jsonResponse.type === 'upload_request') {
+          return jsonResponse.message;
+        } else if (jsonResponse.type === 'file_list' || 
+                   jsonResponse.type === 'file_deleted' || 
+                   jsonResponse.type === 'supported_files' ||
+                   jsonResponse.type === 'help' ||
+                   jsonResponse.type === 'error') {
+          return jsonResponse.message;
+        }
+      }
+
       if (!response.body) {
         throw new Error('No response body received');
       }
@@ -265,10 +284,119 @@ export default function TerminalBox() {
     }
   };
 
+  const uploadFile = async (file: File): Promise<string> => {
+    console.log('Uploading file:', file.name);
+    
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    try {
+      const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const response = await fetch(`${backendUrl}/api/upload`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      console.log('Upload response status:', response.status);
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: 'Upload failed' }));
+        throw new Error(errorData.detail || `Upload failed: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      if (result.success) {
+        return result.message;
+      } else {
+        throw new Error(result.message || 'Upload failed');
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        throw error;
+      }
+      throw new Error('Upload failed due to network error');
+    }
+  };
+
+  const triggerFileUpload = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    // Accept multiple file types - matches backend SUPPORTED_EXTENSIONS
+    input.accept = '.pdf,.txt,.py,.js,.ts,.tsx,.jsx,.md,.json,.csv,.html,.css,.yml,.yaml';
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (file) {
+        setIsResponding(true);
+        
+        // Add a processing message
+        const processingMessage = { 
+          type: 'response' as const, 
+          content: [`Processing file: ${file.name}...`, '', 'Please wait while the document is indexed.'], 
+          id: messageIdRef.current++ 
+        };
+        setMessages(prev => [...prev, processingMessage]);
+        
+        try {
+          const result = await uploadFile(file);
+          
+          // Add success message
+          const successMessage = { 
+            type: 'response' as const, 
+            content: [result], 
+            id: messageIdRef.current++ 
+          };
+          setMessages(prev => [...prev, successMessage]);
+        } catch (error) {
+          console.error('File upload error:', error);
+          
+          const errorLines = [
+            'FILE UPLOAD FAILED',
+            '',
+            error instanceof Error ? error.message : 'Unknown error occurred',
+            '',
+            'Please try again with a different file.'
+          ];
+          
+          const errorMessage = { 
+            type: 'error' as const, 
+            content: errorLines, 
+            id: messageIdRef.current++ 
+          };
+          setMessages(prev => [...prev, errorMessage]);
+        } finally {
+          setIsResponding(false);
+        }
+      }
+    };
+    input.click();
+  };
+
   const handleKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && userInput.trim() && !isResponding && !isTyping) {
       const userMessage = userInput.trim();
       setUserInput('');
+      
+      // Check for cmd: prefix commands
+      const userMessageLower = userMessage.toLowerCase();
+      
+      // Upload command - handle directly in frontend
+      if (userMessageLower === 'cmd:upload') {
+        // Add user message
+        const newUserMessage = { 
+          type: 'user' as const, 
+          content: userMessage, 
+          id: messageIdRef.current++ 
+        };
+        setMessages(prev => [...prev, newUserMessage]);
+        
+        // Trigger file upload
+        triggerFileUpload();
+        return;
+      }
+      
+      // All other cmd: commands are handled by backend
+      // Regular chat messages (without cmd: prefix) go to LLM
+      
       setIsResponding(true);
       
       // Add user message
@@ -402,7 +530,6 @@ export default function TerminalBox() {
     }
   };
 
-
   // Keyboard shortcut for emergency reset (Ctrl+R or Cmd+R)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -437,14 +564,14 @@ export default function TerminalBox() {
     }
   }, [isInputDisabled, showInitialPrompt]);
 
-       return (
-     <div 
-       className="w-full mx-auto px-4 py-4" 
-       style={{ 
-         height: '70vh',
-         maxWidth: '600px',
-       }}
-     >
+  return (
+    <div 
+      className="w-full mx-auto px-4 py-4" 
+      style={{ 
+        height: '70vh',
+        maxWidth: '600px',
+      }}
+    >
       <div
         className="bg-black border border-green-500 mx-auto flex flex-col"
         style={{
@@ -516,251 +643,251 @@ export default function TerminalBox() {
           </button>
         </div>
 
-                 {/* Terminal Content */}
-         <div
-           style={{
-             flex: 1,
-             display: 'flex',
-             flexDirection: 'column',
-             padding: '16px',
-             minHeight: 0, // Important for flex layouts
-           }}
-         >
-        {/* Scrollable content area */}
-        <div 
-          ref={scrollAreaRef}
-          style={{ 
+        {/* Terminal Content */}
+        <div
+          style={{
             flex: 1,
-            overflowY: 'auto',
-            fontFamily: 'Courier New, monospace',
-            fontSize: '16px',
-            lineHeight: '1.4',
-            color: '#00ff41',
-            minHeight: 0, // Important for flex scrolling
+            display: 'flex',
+            flexDirection: 'column',
+            padding: '16px',
+            minHeight: 0, // Important for flex layouts
           }}
         >
-          {messages.map((message) => (
-            <div key={message.id} style={{ marginBottom: '12px' }}>
-              {message.type === 'system' && showInitialPrompt && (
-                <TypingText
-                  ref={registerTypingRef}
-                  lines={message.content as string[]}
-                  onDone={() => {
-                    handleInitialPromptDone();
-                  }}
-                  onStart={handleTypingStart}
-                  onUpdate={scrollToBottom}
-                  speed={50}
-                />
-              )}
-              
-              {message.type === 'system' && !showInitialPrompt && (
-                <div 
-                  className="typing-text" 
-                  style={{ 
-                    wordBreak: 'break-word', 
-                    whiteSpace: 'pre-wrap',
-                    userSelect: 'text'
-                  }}
-                >
-                  {(message.content as string[]).map((line, i) => (
-                    <div key={i}>{line}</div>
-                  ))}
-                </div>
-              )}
-              
-              {message.type === 'user' && (
-                <div style={{ 
-                  wordBreak: 'break-word', 
-                  whiteSpace: 'pre-wrap',
-                  display: 'flex',
-                  alignItems: 'flex-start'
-                }}>
-                  <span style={{ marginRight: '8px', flexShrink: 0 }}>{'>'}</span>
-                  <span>{message.content}</span>
-                </div>
-              )}
-              
-              {message.type === 'response' && (
-                <div style={{ 
-                  wordBreak: 'break-word', 
-                  whiteSpace: 'pre-wrap',
-                  marginTop: '8px'
-                }}>
-                  <TypingText
-                    ref={registerTypingRef}
-                    lines={(() => {
-                      console.log('Rendering response message:', message.content);
-                      const lines = message.content as string[];
-                      console.log('Lines to pass to TypingText:', lines);
-                      console.log('Lines type:', typeof lines, Array.isArray(lines));
-                      return lines;
-                    })()}
-                    onStart={handleTypingStart}
-                    onDone={handleTypingDone}
-                    onUpdate={scrollToBottom}
-                    speed={30}
-                  />
-                </div>
-              )}
-
-              {message.type === 'error' && (
-                <div style={{ 
-                  wordBreak: 'break-word', 
-                  whiteSpace: 'pre-wrap',
-                  marginTop: '8px',
-                  color: '#ff4444'
-                }}>
+          {/* Scrollable content area */}
+          <div 
+            ref={scrollAreaRef}
+            style={{ 
+              flex: 1,
+              overflowY: 'auto',
+              fontFamily: 'Courier New, monospace',
+              fontSize: '16px',
+              lineHeight: '1.4',
+              color: '#00ff41',
+              minHeight: 0, // Important for flex scrolling
+            }}
+          >
+            {messages.map((message) => (
+              <div key={message.id} style={{ marginBottom: '12px' }}>
+                {message.type === 'system' && showInitialPrompt && (
                   <TypingText
                     ref={registerTypingRef}
                     lines={message.content as string[]}
+                    onDone={() => {
+                      handleInitialPromptDone();
+                    }}
                     onStart={handleTypingStart}
-                    onDone={handleTypingDone}
                     onUpdate={scrollToBottom}
-                    speed={30}
+                    speed={50}
                   />
-                </div>
-              )}
-            </div>
-          ))}
-          
-          {/* Typing indicator */}
-          {isResponding && (
+                )}
+                
+                {message.type === 'system' && !showInitialPrompt && (
+                  <div 
+                    className="typing-text" 
+                    style={{ 
+                      wordBreak: 'break-word', 
+                      whiteSpace: 'pre-wrap',
+                      userSelect: 'text'
+                    }}
+                  >
+                    {(message.content as string[]).map((line, i) => (
+                      <div key={i}>{line}</div>
+                    ))}
+                  </div>
+                )}
+                
+                {message.type === 'user' && (
+                  <div style={{ 
+                    wordBreak: 'break-word', 
+                    whiteSpace: 'pre-wrap',
+                    display: 'flex',
+                    alignItems: 'flex-start'
+                  }}>
+                    <span style={{ marginRight: '8px', flexShrink: 0 }}>{'>'}</span>
+                    <span>{message.content}</span>
+                  </div>
+                )}
+                
+                {message.type === 'response' && (
+                  <div style={{ 
+                    wordBreak: 'break-word', 
+                    whiteSpace: 'pre-wrap',
+                    marginTop: '8px'
+                  }}>
+                    <TypingText
+                      ref={registerTypingRef}
+                      lines={(() => {
+                        console.log('Rendering response message:', message.content);
+                        const lines = message.content as string[];
+                        console.log('Lines to pass to TypingText:', lines);
+                        console.log('Lines type:', typeof lines, Array.isArray(lines));
+                        return lines;
+                      })()}
+                      onStart={handleTypingStart}
+                      onDone={handleTypingDone}
+                      onUpdate={scrollToBottom}
+                      speed={30}
+                    />
+                  </div>
+                )}
+
+                {message.type === 'error' && (
+                  <div style={{ 
+                    wordBreak: 'break-word', 
+                    whiteSpace: 'pre-wrap',
+                    marginTop: '8px',
+                    color: '#ff4444'
+                  }}>
+                    <TypingText
+                      ref={registerTypingRef}
+                      lines={message.content as string[]}
+                      onStart={handleTypingStart}
+                      onDone={handleTypingDone}
+                      onUpdate={scrollToBottom}
+                      speed={30}
+                    />
+                  </div>
+                )}
+              </div>
+            ))}
+            
+            {/* Typing indicator */}
+            {isResponding && (
+              <div style={{ 
+                color: '#00ff41',
+                fontStyle: 'italic',
+                opacity: 0.7
+              }}>
+                <TypingText
+                  ref={registerTypingRef}
+                  lines={['thinking...']}
+                  onStart={handleTypingStart}
+                  onUpdate={scrollToBottom}
+                  speed={100}
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Emergency reset button - only show if stuck (but not during initial prompt) */}
+          {(isTyping || isResponding) && !showInitialPrompt && (
             <div style={{ 
-              color: '#00ff41',
-              fontStyle: 'italic',
+              fontSize: '12px', 
+              color: '#ff4444', 
+              marginBottom: '8px',
+              textAlign: 'center',
               opacity: 0.7
             }}>
-              <TypingText
-                ref={registerTypingRef}
-                lines={['thinking...']}
-                onStart={handleTypingStart}
-                onUpdate={scrollToBottom}
-                speed={100}
-              />
+              <button
+                onClick={handleEmergencyReset}
+                style={{
+                  background: 'transparent',
+                  border: '1px solid #ff4444',
+                  color: '#ff4444',
+                  padding: '4px 8px',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '12px',
+                  fontFamily: 'Courier New, monospace'
+                }}
+              >
+                Reset (Ctrl+R)
+              </button>
+              <div style={{ marginTop: '4px', fontSize: '10px' }}>
+                System stuck? Click to reset or press Ctrl+R
+              </div>
             </div>
           )}
-        </div>
 
-        {/* Emergency reset button - only show if stuck (but not during initial prompt) */}
-        {(isTyping || isResponding) && !showInitialPrompt && (
-          <div style={{ 
-            fontSize: '12px', 
-            color: '#ff4444', 
-            marginBottom: '8px',
-            textAlign: 'center',
-            opacity: 0.7
-          }}>
-            <button
-              onClick={handleEmergencyReset}
+          {/* Fixed input area at bottom */}
+          <div 
+            style={{ 
+              flexShrink: 0, // Don't shrink this area
+              borderTop: '1px solid rgba(0,255,65,0.3)',
+              // padding: '12px 0',
+              paddingTop: '8px',
+              marginTop: '12px',
+              position: 'relative',
+              opacity: isInputDisabled ? 0.5 : 1
+            }}
+            onTouchStart={(e) => {
+              // Only focus when touching the input area
+              console.log('Input area touched');
+              e.stopPropagation();
+              focusInput();
+            }}
+            onClick={(e) => {
+              // Only focus when clicking the input area
+              console.log('Input area clicked');
+              e.stopPropagation();
+              focusInput();
+            }}
+          >
+            {/* Hidden input for keyboard handling */}
+            <input
+              ref={hiddenInputRef}
+              value={userInput}
+              onChange={e => {
+                const newValue = e.target.value;
+                const wordCount = newValue.trim().split(/\s+/).filter(word => word.length > 0).length;
+                
+                // Only update if within word limit or if deleting
+                if (wordCount <= MAX_WORDS || newValue.length < userInput.length) {
+                  setUserInput(newValue);
+                }
+              }}
+              onKeyDown={handleKeyDown}
+              disabled={isInputDisabled}
               style={{
-                background: 'transparent',
-                border: '1px solid #ff4444',
-                color: '#ff4444',
-                padding: '4px 8px',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontSize: '12px',
-                fontFamily: 'Courier New, monospace'
+                position: 'absolute',
+                left: '-9999px',
+                opacity: 0,
+                pointerEvents: 'none',
               }}
-            >
-              Reset (Ctrl+R)
-            </button>
-            <div style={{ marginTop: '4px', fontSize: '10px' }}>
-              System stuck? Click to reset or press Ctrl+R
+              autoFocus
+              spellCheck={false}
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+            />
+            
+            {/* Visual input display */}
+            <div style={{ 
+              display: 'flex', 
+              alignItems: 'flex-start',
+              fontFamily: 'Courier New, monospace',
+              fontSize: '16px',
+              lineHeight: '1.4',
+              color: '#00ff41',
+              minHeight: '1.2em',
+            }}>
+              <span style={{ marginRight: '8px', flexShrink: 0 }}>{'>'}</span>
+              <div 
+                ref={inputDisplayRef}
+                style={{ 
+                  flex: 1,
+                  wordBreak: 'break-all',
+                  whiteSpace: 'pre-wrap',
+                  minHeight: '1.4em',
+                  maxHeight: '6.4em', // Allow more lines
+                  overflowY: 'auto',
+                  paddingRight: '4px',
+                }}
+              >
+                {userInput}
+                {!isInputDisabled && (
+                  <span 
+                    style={{ 
+                      animation: 'blink 1s infinite',
+                      color: '#00ff41',
+                    }}
+                  >
+                    _
+                  </span>
+                )}
+              </div>
             </div>
           </div>
-        )}
-
-        {/* Fixed input area at bottom */}
-        <div 
-          style={{ 
-            flexShrink: 0, // Don't shrink this area
-            borderTop: '1px solid rgba(0,255,65,0.3)',
-            // padding: '12px 0',
-            paddingTop: '8px',
-            marginTop: '12px',
-            position: 'relative',
-            opacity: isInputDisabled ? 0.5 : 1
-          }}
-          onTouchStart={(e) => {
-            // Only focus when touching the input area
-            console.log('Input area touched');
-            e.stopPropagation();
-            focusInput();
-          }}
-          onClick={(e) => {
-            // Only focus when clicking the input area
-            console.log('Input area clicked');
-            e.stopPropagation();
-            focusInput();
-          }}
-        >
-          {/* Hidden input for keyboard handling */}
-          <input
-            ref={hiddenInputRef}
-            value={userInput}
-            onChange={e => {
-              const newValue = e.target.value;
-              const wordCount = newValue.trim().split(/\s+/).filter(word => word.length > 0).length;
-              
-              // Only update if within word limit or if deleting
-              if (wordCount <= MAX_WORDS || newValue.length < userInput.length) {
-                setUserInput(newValue);
-              }
-            }}
-            onKeyDown={handleKeyDown}
-            disabled={isInputDisabled}
-            style={{
-              position: 'absolute',
-              left: '-9999px',
-              opacity: 0,
-              pointerEvents: 'none',
-            }}
-            autoFocus
-            spellCheck={false}
-            autoComplete="off"
-            autoCorrect="off"
-            autoCapitalize="off"
-          />
-          
-          {/* Visual input display */}
-          <div style={{ 
-            display: 'flex', 
-            alignItems: 'flex-start',
-            fontFamily: 'Courier New, monospace',
-            fontSize: '16px',
-            lineHeight: '1.4',
-            color: '#00ff41',
-            minHeight: '1.2em',
-          }}>
-            <span style={{ marginRight: '8px', flexShrink: 0 }}>{'>'}</span>
-            <div 
-              ref={inputDisplayRef}
-              style={{ 
-                flex: 1,
-                wordBreak: 'break-all',
-                whiteSpace: 'pre-wrap',
-                minHeight: '1.4em',
-                maxHeight: '6.4em', // Allow more lines
-                overflowY: 'auto',
-                paddingRight: '4px',
-              }}
-            >
-              {userInput}
-              {!isInputDisabled && (
-                <span 
-                  style={{ 
-                    animation: 'blink 1s infinite',
-                    color: '#00ff41',
-                  }}
-                >
-                  _
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
         </div>
       </div>
     </div>
