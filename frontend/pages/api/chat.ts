@@ -38,38 +38,50 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(response.status).json({ detail: errorData.detail || 'Backend service error' });
     }
 
-    // Set headers for streaming
-    res.writeHead(200, {
-      'Content-Type': 'text/plain; charset=utf-8',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'Transfer-Encoding': 'chunked',
-    });
+    // Check if response is JSON (for file management commands)
+    const contentType = response.headers.get('content-type');
+    console.log('Backend response content-type:', contentType);
+    
+    if (contentType && contentType.includes('application/json')) {
+      // Handle JSON response (file management commands)
+      const jsonData = await response.json();
+      console.log('Received JSON response:', jsonData);
+      return res.status(200).json(jsonData);
+    } else {
+      // Handle streaming response (regular chat)
+      // Set headers for streaming
+      res.writeHead(200, {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'Transfer-Encoding': 'chunked',
+      });
 
-    // Stream the response
-    if (response.body) {
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
+      // Stream the response
+      if (response.body) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
 
-      try {
-        console.log('Starting to stream response...');
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) {
-            console.log('Stream complete');
-            break;
+        try {
+          console.log('Starting to stream response...');
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) {
+              console.log('Stream complete');
+              break;
+            }
+            
+            const chunk = decoder.decode(value, { stream: true });
+            console.log('Streaming chunk:', chunk);
+            res.write(chunk);
           }
-          
-          const chunk = decoder.decode(value, { stream: true });
-          console.log('Streaming chunk:', chunk);
-          res.write(chunk);
+        } finally {
+          reader.releaseLock();
         }
-      } finally {
-        reader.releaseLock();
       }
-    }
 
-    res.end();
+      res.end();
+    }
   } catch (error) {
     console.error('API Route Error:', error);
     
