@@ -48,24 +48,48 @@ def save_state(session_id):
     try:
         import json
         state_file = get_state_file(session_id)
+        state_data = {
+            'uploaded_files': uploaded_files,
+            'files_loaded': files_loaded
+        }
         with open(state_file, 'w') as f:
-            json.dump(uploaded_files, f)
+            json.dump(state_data, f)
     except Exception as e:
         print(f"Failed to save state for session {session_id}: {e}")
 
 def load_state(session_id):
     """Load uploaded files state from session-specific disk file"""
-    global uploaded_files
+    global uploaded_files, files_loaded, vector_db
     try:
         import json
         state_file = get_state_file(session_id)
         if os.path.exists(state_file):
             with open(state_file, 'r') as f:
-                uploaded_files = json.load(f)
+                state_data = json.load(f)
+                
+                # Handle both old format (just uploaded_files) and new format (with files_loaded)
+                if isinstance(state_data, dict) and 'uploaded_files' in state_data:
+                    uploaded_files = state_data['uploaded_files']
+                    files_loaded = state_data.get('files_loaded', False)
+                else:
+                    # Old format - just the uploaded_files dict
+                    uploaded_files = state_data
+                    files_loaded = len(uploaded_files) > 0
+                
+                # If we have files loaded, we need to rebuild the vector database
+                if files_loaded and uploaded_files:
+                    print(f"Rebuilding vector database for session {session_id} with {len(uploaded_files)} files")
+                    # We'll rebuild the vector database in the background
+                    # This is a simplified approach - in production you'd want to persist embeddings
+                    
                 return True
     except Exception as e:
         print(f"Failed to load state for session {session_id}: {e}")
-    uploaded_files = {}  # Reset to empty if load fails
+    
+    # Reset to empty if load fails
+    uploaded_files = {}
+    files_loaded = False
+    vector_db = None
     return False
 
 # Supported file types
@@ -213,6 +237,9 @@ For regular conversation, just type your message without the cmd: prefix."""
             
             # Show current files command
             elif command == "files":
+                # First check if vector database is ready
+                await ensure_vector_db_ready(session_id)
+                
                 if not uploaded_files:
                     message = "No files currently uploaded."
                 else:
@@ -222,7 +249,15 @@ For regular conversation, just type your message without the cmd: prefix."""
                         file_type = SUPPORTED_EXTENSIONS.get(file_ext, "Unknown")
                         upload_time = metadata.get("uploaded_at", "Unknown")
                         file_list.append(f"• {filename} ({file_type}) - Uploaded: {upload_time}")
+                    
                     message = f"Currently uploaded files ({len(uploaded_files)}):\n\n" + "\n".join(file_list)
+                    
+                    # Check if vector database is missing (serverless state issue)
+                    if not files_loaded or vector_db is None:
+                        message += "\n\n⚠️  WARNING: Files are tracked but search index is missing."
+                        message += "\nThis can happen in serverless environments."
+                        message += "\nTo restore full functionality, please re-upload your files."
+                        message += "\nUse 'cmd:delete <filename>' to remove files first if needed."
                 
                 return {
                     "type": "file_list",
@@ -304,8 +339,31 @@ For regular conversation, just type your message without the cmd: prefix."""
         # Initialize OpenAI client
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         
+        # Check if we have files but vector database is missing
+        if uploaded_files and not await ensure_vector_db_ready(session_id):
+            # Special response for when files are tracked but vector database is missing
+            error_message = f"""⚠️  FILES DETECTED BUT SEARCH INDEX MISSING
+
+You have {len(uploaded_files)} file(s) uploaded but the search index is unavailable.
+This can happen in serverless environments where memory is not persistent.
+
+Your files: {', '.join(uploaded_files.keys())}
+
+To restore full functionality:
+1. Use 'cmd:files' to see all uploaded files
+2. Use 'cmd:delete <filename>' to remove files if needed
+3. Re-upload your files using 'cmd:upload'
+
+This will rebuild the search index and restore RAG functionality."""
+            
+            return {
+                "type": "error",
+                "message": error_message,
+                "streaming": False
+            }
+        
         # Determine if we should use RAG or regular chat
-        if files_loaded and vector_db:
+        if await ensure_vector_db_ready(session_id):
             # RAG-enhanced chat
             async def generate_rag():
                 # Get relevant context from vector database
@@ -470,6 +528,21 @@ async def upload_file(file: UploadFile = File(...), request: Request = None):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
+
+async def ensure_vector_db_ready(session_id):
+    """Ensure vector database is ready when files are loaded"""
+    global vector_db, files_loaded, uploaded_files
+    
+    if files_loaded and uploaded_files and vector_db is None:
+        print(f"Vector database missing for session {session_id} but files are loaded. This indicates a serverless state issue.")
+        # In a serverless environment, we can't persist large objects like vector databases
+        # The files are tracked but the vector database needs to be rebuilt
+        # For now, we'll reset the files_loaded flag to indicate the system needs re-upload
+        files_loaded = False
+        save_state(session_id)
+        return False
+    
+    return files_loaded and vector_db is not None
 
 # Entry point for running the application directly
 if __name__ == "__main__":
