@@ -1,5 +1,5 @@
 # Import required FastAPI components for building the API
-from fastapi import FastAPI, HTTPException, File, UploadFile
+from fastapi import FastAPI, HTTPException, File, UploadFile, Request
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -25,6 +25,48 @@ app = FastAPI(title="OpenAI Chat API with Multi-File RAG")
 vector_db = None
 uploaded_files: Dict[str, Dict] = {}  # Store file metadata
 files_loaded = False
+
+# File-based state for serverless persistence (session-scoped)
+import hashlib
+import time
+
+def get_session_id(request):
+    """Generate a session ID from request headers for consistent state per user session"""
+    # Use a combination of User-Agent and a time-based component for session identification
+    # This creates a unique session per browser instance without needing cookies
+    user_agent = request.headers.get('user-agent', 'unknown')
+    # Create a simple session identifier (resets when server restarts, which is fine)
+    session_data = f"{user_agent}_{int(time.time() / 3600)}"  # Reset every hour
+    return hashlib.md5(session_data.encode()).hexdigest()[:8]
+
+def get_state_file(session_id):
+    """Get session-specific state file path"""
+    return f'/tmp/files_{session_id}.json'
+
+def save_state(session_id):
+    """Save uploaded files state to session-specific disk file"""
+    try:
+        import json
+        state_file = get_state_file(session_id)
+        with open(state_file, 'w') as f:
+            json.dump(uploaded_files, f)
+    except Exception as e:
+        print(f"Failed to save state for session {session_id}: {e}")
+
+def load_state(session_id):
+    """Load uploaded files state from session-specific disk file"""
+    global uploaded_files
+    try:
+        import json
+        state_file = get_state_file(session_id)
+        if os.path.exists(state_file):
+            with open(state_file, 'r') as f:
+                uploaded_files = json.load(f)
+                return True
+    except Exception as e:
+        print(f"Failed to load state for session {session_id}: {e}")
+    uploaded_files = {}  # Reset to empty if load fails
+    return False
 
 # Supported file types
 SUPPORTED_EXTENSIONS = {
@@ -107,11 +149,15 @@ class ChatRequest(BaseModel):
 
 # Define the main chat endpoint that handles POST requests
 @app.post("/api/chat")
-async def chat(request: ChatRequest):
+async def chat(chat_request: ChatRequest, request: Request):
     global vector_db, uploaded_files, files_loaded
     
+    # Get session ID and load session-specific state
+    session_id = get_session_id(request)
+    load_state(session_id)
+    
     try:
-        user_message_lower = request.user_message.lower()
+        user_message_lower = chat_request.user_message.lower()
         
         # Check for command prefix - only process commands that start with "cmd:"
         if user_message_lower.startswith("cmd:"):
@@ -224,6 +270,9 @@ For regular conversation, just type your message without the cmd: prefix."""
                         # Note: This is a simplified approach - in production you'd want more efficient file-specific deletion
                         message = f"File '{actual_filename}' deleted successfully. {len(uploaded_files)} files remaining."
                     
+                    # Save state to disk for serverless persistence
+                    save_state(session_id)
+                    
                     return {
                         "type": "file_deleted",
                         "message": message,
@@ -261,7 +310,7 @@ For regular conversation, just type your message without the cmd: prefix."""
             async def generate_rag():
                 # Get relevant context from vector database
                 relevant_chunks = vector_db.search_by_text(
-                    request.user_message, 
+                    chat_request.user_message, 
                     k=3, 
                     return_as_text=True
                 )
@@ -273,7 +322,7 @@ For regular conversation, just type your message without the cmd: prefix."""
                 file_context = f"Currently loaded files: {', '.join(uploaded_files.keys())}"
                 
                 # Enhance the developer message with file context
-                enhanced_developer_message = f"""{request.developer_message}
+                enhanced_developer_message = f"""{chat_request.developer_message}
 
 You have access to content from uploaded files. Use this content to answer the user's question:
 
@@ -286,10 +335,10 @@ Please answer the user's question based on the document content above. If the qu
 
                 # Create streaming response with RAG context
                 stream = client.chat.completions.create(
-                    model=request.model,
+                    model=chat_request.model,
                     messages=[
                         {"role": "developer", "content": enhanced_developer_message},
-                        {"role": "user", "content": request.user_message}
+                        {"role": "user", "content": chat_request.user_message}
                     ],
                     stream=True
                 )
@@ -303,10 +352,10 @@ Please answer the user's question based on the document content above. If the qu
             # Regular chat without RAG
             async def generate():
                 stream = client.chat.completions.create(
-                    model=request.model,
+                    model=chat_request.model,
                     messages=[
-                        {"role": "developer", "content": request.developer_message},
-                        {"role": "user", "content": request.user_message}
+                        {"role": "developer", "content": chat_request.developer_message},
+                        {"role": "user", "content": chat_request.user_message}
                     ],
                     stream=True
                 )
@@ -327,8 +376,12 @@ async def health_check():
 
 # Define the file upload and indexing endpoint
 @app.post("/api/upload")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(file: UploadFile = File(...), request: Request = None):
     global vector_db, uploaded_files, files_loaded
+    
+    # Get session ID and load session-specific state
+    session_id = get_session_id(request)
+    load_state(session_id)
     
     try:
         # Validate file type
@@ -395,6 +448,9 @@ async def upload_file(file: UploadFile = File(...)):
                 "file_size": len(file_content)
             }
             files_loaded = True
+            
+            # Save state to disk for serverless persistence
+            save_state(session_id)
             
             return {
                 "success": True,
