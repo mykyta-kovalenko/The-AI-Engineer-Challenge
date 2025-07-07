@@ -21,76 +21,25 @@ load_dotenv(dotenv_path="../.env.local")
 # Initialize FastAPI application with a title
 app = FastAPI(title="OpenAI Chat API with Multi-File RAG")
 
-# Global variables for multi-file RAG functionality
-vector_db = None
-uploaded_files: Dict[str, Dict] = {}  # Store file metadata
-files_loaded = False
-
-# File-based state for serverless persistence (session-scoped)
-import hashlib
-import time
+# Simple in-memory session storage for Vercel deployment
+# This will reset on each serverless function cold start, which is fine for demo purposes
+session_data: Dict[str, Dict] = {}
 
 def get_session_id(request):
-    """Generate a session ID from request headers for consistent state per user session"""
-    # Use a combination of User-Agent and a time-based component for session identification
-    # This creates a unique session per browser instance without needing cookies
+    """Generate a simple session ID from request headers"""
     user_agent = request.headers.get('user-agent', 'unknown')
-    # Create a simple session identifier (resets when server restarts, which is fine)
-    session_data = f"{user_agent}_{int(time.time() / 3600)}"  # Reset every hour
-    return hashlib.md5(session_data.encode()).hexdigest()[:8]
+    # Simple session ID for demonstration
+    return hash(user_agent) % 10000
 
-def get_state_file(session_id):
-    """Get session-specific state file path"""
-    return f'/tmp/files_{session_id}.json'
-
-def save_state(session_id):
-    """Save uploaded files state to session-specific disk file"""
-    try:
-        import json
-        state_file = get_state_file(session_id)
-        state_data = {
-            'uploaded_files': uploaded_files,
-            'files_loaded': files_loaded
+def get_session_data(session_id: str):
+    """Get or create session data"""
+    if session_id not in session_data:
+        session_data[session_id] = {
+            'vector_db': None,
+            'uploaded_files': {},
+            'files_loaded': False
         }
-        with open(state_file, 'w') as f:
-            json.dump(state_data, f)
-    except Exception as e:
-        print(f"Failed to save state for session {session_id}: {e}")
-
-def load_state(session_id):
-    """Load uploaded files state from session-specific disk file"""
-    global uploaded_files, files_loaded, vector_db
-    try:
-        import json
-        state_file = get_state_file(session_id)
-        if os.path.exists(state_file):
-            with open(state_file, 'r') as f:
-                state_data = json.load(f)
-                
-                # Handle both old format (just uploaded_files) and new format (with files_loaded)
-                if isinstance(state_data, dict) and 'uploaded_files' in state_data:
-                    uploaded_files = state_data['uploaded_files']
-                    files_loaded = state_data.get('files_loaded', False)
-                else:
-                    # Old format - just the uploaded_files dict
-                    uploaded_files = state_data
-                    files_loaded = len(uploaded_files) > 0
-                
-                # If we have files loaded, we need to rebuild the vector database
-                if files_loaded and uploaded_files:
-                    print(f"Rebuilding vector database for session {session_id} with {len(uploaded_files)} files")
-                    # We'll rebuild the vector database in the background
-                    # This is a simplified approach - in production you'd want to persist embeddings
-                    
-                return True
-    except Exception as e:
-        print(f"Failed to load state for session {session_id}: {e}")
-    
-    # Reset to empty if load fails
-    uploaded_files = {}
-    files_loaded = False
-    vector_db = None
-    return False
+    return session_data[session_id]
 
 # Supported file types
 SUPPORTED_EXTENSIONS = {
@@ -174,11 +123,13 @@ class ChatRequest(BaseModel):
 # Define the main chat endpoint that handles POST requests
 @app.post("/api/chat")
 async def chat(chat_request: ChatRequest, request: Request):
-    global vector_db, uploaded_files, files_loaded
+    # Get session ID and session data
+    session_id = str(get_session_id(request))
+    session = get_session_data(session_id)
     
-    # Get session ID and load session-specific state
-    session_id = get_session_id(request)
-    load_state(session_id)
+    vector_db = session['vector_db']
+    uploaded_files = session['uploaded_files']
+    files_loaded = session['files_loaded']
     
     try:
         user_message_lower = chat_request.user_message.lower()
@@ -237,9 +188,6 @@ For regular conversation, just type your message without the cmd: prefix."""
             
             # Show current files command
             elif command == "files":
-                # First check if vector database is ready
-                await ensure_vector_db_ready(session_id)
-                
                 if not uploaded_files:
                     message = "No files currently uploaded."
                 else:
@@ -252,12 +200,10 @@ For regular conversation, just type your message without the cmd: prefix."""
                     
                     message = f"Currently uploaded files ({len(uploaded_files)}):\n\n" + "\n".join(file_list)
                     
-                    # Check if vector database is missing (serverless state issue)
+                    # Simple check for RAG availability
                     if not files_loaded or vector_db is None:
-                        message += "\n\n⚠️  WARNING: Files are tracked but search index is missing."
-                        message += "\nThis can happen in serverless environments."
-                        message += "\nTo restore full functionality, please re-upload your files."
-                        message += "\nUse 'cmd:delete <filename>' to remove files first if needed."
+                        message += "\n\n⚠️  WARNING: Files uploaded but search index not ready."
+                        message += "\nTry re-uploading files if you encounter issues."
                 
                 return {
                     "type": "file_list",
@@ -296,17 +242,11 @@ For regular conversation, just type your message without the cmd: prefix."""
                     
                     # If no files left, clear vector database
                     if not uploaded_files:
-                        global files_loaded
-                        vector_db = None
-                        files_loaded = False
+                        session['vector_db'] = None
+                        session['files_loaded'] = False
                         message = f"File '{actual_filename}' deleted successfully. No files remaining."
                     else:
-                        # Rebuild vector database with remaining files
-                        # Note: This is a simplified approach - in production you'd want more efficient file-specific deletion
                         message = f"File '{actual_filename}' deleted successfully. {len(uploaded_files)} files remaining."
-                    
-                    # Save state to disk for serverless persistence
-                    save_state(session_id)
                     
                     return {
                         "type": "file_deleted",
@@ -339,22 +279,15 @@ For regular conversation, just type your message without the cmd: prefix."""
         # Initialize OpenAI client
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         
-        # Check if we have files but vector database is missing
-        if uploaded_files and not await ensure_vector_db_ready(session_id):
-            # Special response for when files are tracked but vector database is missing
-            error_message = f"""⚠️  FILES DETECTED BUT SEARCH INDEX MISSING
+        # Check if we have files but no vector database (simple error handling)
+        if uploaded_files and not vector_db:
+            error_message = f"""⚠️  FILES UPLOADED BUT NOT INDEXED
 
-You have {len(uploaded_files)} file(s) uploaded but the search index is unavailable.
-This can happen in serverless environments where memory is not persistent.
+You have {len(uploaded_files)} file(s) uploaded but they are not indexed for search.
 
 Your files: {', '.join(uploaded_files.keys())}
 
-To restore full functionality:
-1. Use 'cmd:files' to see all uploaded files
-2. Use 'cmd:delete <filename>' to remove files if needed
-3. Re-upload your files using 'cmd:upload'
-
-This will rebuild the search index and restore RAG functionality."""
+Please try re-uploading your files using 'cmd:upload' to restore search functionality."""
             
             return {
                 "type": "error",
@@ -363,7 +296,7 @@ This will rebuild the search index and restore RAG functionality."""
             }
         
         # Determine if we should use RAG or regular chat
-        if await ensure_vector_db_ready(session_id):
+        if files_loaded and vector_db and uploaded_files:
             # RAG-enhanced chat
             async def generate_rag():
                 # Get relevant context from vector database
@@ -435,11 +368,12 @@ async def health_check():
 # Define the file upload and indexing endpoint
 @app.post("/api/upload")
 async def upload_file(file: UploadFile = File(...), request: Request = None):
-    global vector_db, uploaded_files, files_loaded
+    # Get session ID and session data
+    session_id = str(get_session_id(request))
+    session = get_session_data(session_id)
     
-    # Get session ID and load session-specific state
-    session_id = get_session_id(request)
-    load_state(session_id)
+    vector_db = session['vector_db']
+    uploaded_files = session['uploaded_files']
     
     try:
         # Validate file type
@@ -497,7 +431,7 @@ async def upload_file(file: UploadFile = File(...), request: Request = None):
                 for chunk, embedding in zip(prefixed_chunks, new_embeddings):
                     vector_db.insert(chunk, np.array(embedding))
             
-            # Update global state
+            # Update session state
             uploaded_files[file.filename] = {
                 "filename": file.filename,
                 "file_type": SUPPORTED_EXTENSIONS[file_ext],
@@ -505,10 +439,11 @@ async def upload_file(file: UploadFile = File(...), request: Request = None):
                 "chunks_count": len(chunks),
                 "file_size": len(file_content)
             }
-            files_loaded = True
             
-            # Save state to disk for serverless persistence
-            save_state(session_id)
+            # Update session with new data
+            session['vector_db'] = vector_db
+            session['uploaded_files'] = uploaded_files
+            session['files_loaded'] = True
             
             return {
                 "success": True,
@@ -528,21 +463,6 @@ async def upload_file(file: UploadFile = File(...), request: Request = None):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
-
-async def ensure_vector_db_ready(session_id):
-    """Ensure vector database is ready when files are loaded"""
-    global vector_db, files_loaded, uploaded_files
-    
-    if files_loaded and uploaded_files and vector_db is None:
-        print(f"Vector database missing for session {session_id} but files are loaded. This indicates a serverless state issue.")
-        # In a serverless environment, we can't persist large objects like vector databases
-        # The files are tracked but the vector database needs to be rebuilt
-        # For now, we'll reset the files_loaded flag to indicate the system needs re-upload
-        files_loaded = False
-        save_state(session_id)
-        return False
-    
-    return files_loaded and vector_db is not None
 
 # Entry point for running the application directly
 if __name__ == "__main__":
