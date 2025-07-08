@@ -320,8 +320,7 @@ export default function TerminalBox() {
     formData.append('file', file);
     
     try {
-      const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-      const response = await fetch(`${backendUrl}/api/upload`, {
+      const response = await fetch(`/api/upload`, {
         method: 'POST',
         body: formData,
       });
